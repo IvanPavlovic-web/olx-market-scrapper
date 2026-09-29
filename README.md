@@ -6,12 +6,6 @@ The application periodically scrapes popular OLX.ba categories, stores every lis
 
 ---
 
-## Architecture / Flow Diagram
-
-![Architecture and flow diagram](diagram.png)
-
----
-
 ## Tech Stack
 
 | Layer | Technology |
