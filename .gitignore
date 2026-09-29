@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+backend/celerybeat-schedule
+
+# Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Data
+data/
+*.log
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

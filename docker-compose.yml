@@ -1,0 +1,140 @@
+x-common-env: &common-env
+  POSTGRES_USER: ${POSTGRES_USER:-olx}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olxpass}
+  POSTGRES_DB: ${POSTGRES_DB:-olxmonitor}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: olx_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-olx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olxpass}
+      POSTGRES_DB: ${POSTGRES_DB:-olxmonitor}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./scripts/init_timescale.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-olx} -d ${POSTGRES_DB:-olxmonitor}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: olx_redis
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "512mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    container_name: olx_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *common-env
+      SERVICE_ROLE: api
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    command: >
+      sh -c "until alembic upgrade head; do
+             echo 'Database is not ready; retrying migrations...';
+             sleep 2;
+             done;
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    container_name: olx_worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *common-env
+      SERVICE_ROLE: worker
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - ./backend:/app
+    command: >
+      celery -A app.workers.celery_app worker
+      --loglevel=INFO --concurrency=8 -Q scrape,alerts,default,celery
+
+  beat:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    container_name: olx_beat
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *common-env
+      SERVICE_ROLE: beat
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app beat --loglevel=INFO
+
+  flower:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    container_name: olx_flower
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *common-env
+      SERVICE_ROLE: flower
+    depends_on:
+      redis: { condition: service_healthy }
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app flower --port=5555
+
+  frontend:
+    build: { context: ./frontend, dockerfile: Dockerfile }
+    container_name: olx_frontend
+    restart: unless-stopped
+    env_file: .env
+    depends_on: [api]
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
